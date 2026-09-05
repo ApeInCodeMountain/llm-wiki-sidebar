@@ -1,5 +1,7 @@
 # llm-wiki-sidebar
 
+English | [简体中文](README.zh-CN.md)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![DSH](https://img.shields.io/badge/DeepSeek%20Harness-0.1.2--rc.1%2B-blue)
 ![dsh-better-sidebar](https://img.shields.io/badge/dsh--better--sidebar-%E2%89%A50.16.0-green)
