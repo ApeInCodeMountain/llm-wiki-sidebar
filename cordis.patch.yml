@@ -1,0 +1,39 @@
+# llm-wiki-sidebar bundle patch
+#
+# Declares the composition rows this package contributes when installed through
+# the official CLI (`dsh plugin --profile <name> add …`). For a manual local
+# install, the same rows are added to the profile's own cordis.patch.yml:
+#
+#   - insert:
+#       - id: llm-wiki-sidebar
+#         name: 'llm-wiki-sidebar'
+#       - id: llm-wiki-sidebar-skills
+#         name: '@deepseek-ai/dsh-skill-filesystem'
+#         config:
+#           providerName: 'llm-wiki-sidebar-skills'
+#           includeDefaultRoots: false
+#           customSkillDirs:
+#             - !!js "<resolver for this package's skills/ directory>"
+#
+# Row 1 is the plugin itself: host half (webServer routes over the sandbox-aware
+# fs service) + client half (sidebar tab + markdown viewer decoration).
+# Row 2 mounts the SKILL that ships inside this package
+# (`skills/llm-wiki/SKILL.md` + `scripts/wiki_lint.py`) through a dedicated
+# skill-filesystem instance: `providerName` keeps it distinct from any other
+# provider, and `includeDefaultRoots: false` limits it to exactly this
+# package's skills directory. The `!!js` resolver tries the plausible baseUrls
+# (profile root for a manual patch row, the package directory for a bundle
+# patch) and picks the one where the skill actually exists.
+#
+# The plugin consumes dsh-better-sidebar's `betterSidebar` service (sidebar tab
+# + file viewer) and the host `fs`/`webServer` services.
+- insert:
+    - id: llm-wiki-sidebar
+      name: 'llm-wiki-sidebar'
+    - id: llm-wiki-sidebar-skills
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        providerName: 'llm-wiki-sidebar-skills'
+        includeDefaultRoots: false
+        customSkillDirs:
+          - !!js "(() => { const u = process.getBuiltinModule('node:url'); const fsp = process.getBuiltinModule('node:fs'); const candidates = [new URL('llm-wiki-sidebar/skills/', baseUrl), new URL('skills/', baseUrl)]; for (const c of candidates) { try { const dir = u.fileURLToPath(c); if (fsp.existsSync(dir + 'llm-wiki/SKILL.md')) return dir; } catch (e) {} } throw new Error('llm-wiki-sidebar: skills/llm-wiki/SKILL.md not found relative to baseUrl ' + String(baseUrl)); })()"

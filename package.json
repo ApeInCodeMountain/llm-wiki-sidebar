@@ -1,0 +1,49 @@
+{
+  "name": "llm-wiki-sidebar",
+  "version": "1.1.1",
+  "description": "LLM Wiki workbench for dsh-better-sidebar: browse and lint a Karpathy-style interlinked markdown wiki, open pages with the native markdown viewer, clickable [[wikilinks]] and provenance/relative .md links, and backlinks. Ships the llm-wiki agent skill.",
+  "type": "module",
+  "license": "MIT",
+  "author": "ApeInCodeMountain",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ApeInCodeMountain/llm-wiki-sidebar.git"
+  },
+  "homepage": "https://github.com/ApeInCodeMountain/llm-wiki-sidebar#readme",
+  "bugs": {
+    "url": "https://github.com/ApeInCodeMountain/llm-wiki-sidebar/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh-better-sidebar",
+    "llm-wiki",
+    "knowledge-base",
+    "markdown",
+    "wikilinks"
+  ],
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib",
+    "skills",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
