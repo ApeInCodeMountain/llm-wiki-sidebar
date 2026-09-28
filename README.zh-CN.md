@@ -3,47 +3,60 @@
 [English](README.md) | 简体中文
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![DSH](https://img.shields.io/badge/DeepSeek%20Harness-0.1.2--rc.1%2B-blue)
-![dsh-better-sidebar](https://img.shields.io/badge/dsh--better--sidebar-%E2%89%A50.16.0-green)
+![DSH](https://img.shields.io/badge/DeepSeek%20Harness-0.1.7--rc.2%2B-blue)
+![sidebar](https://img.shields.io/badge/sidebar-built--in-green)
 
-面向 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 的
+面向 **DeepSeek Harness 自带侧边栏**的
 [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 工作台：直接在
-DSH 侧边栏浏览并体检 Karpathy 式互联 markdown wiki，提供高保真页面预览/编辑、可点击的
-`[[wikilinks]]` 与溯源链接、背链，以及驱动导入/查询/维护的 `llm-wiki` agent skill——
-打包为同一个 DSH 插件。
+右侧边栏浏览并体检 Karpathy 式互联 markdown wiki，页面渲染时提供可点击的 `[[wikilinks]]`、
+相对 `.md`/溯源链接与背链，并内置 `llm-wiki` agent skill——打包为同一个 DSH 插件。
+
+> **v2.0.0 是「改用内置侧边栏」的重写版。** v1.x 面向第三方插件
+> [`dsh-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar)，注册的是
+> `betterSidebar` 页签与文件查看器。DSH 现在自带右侧边栏
+> （`@deepseek-ai/dsh-client-ui-sidebar-right`），与该插件冲突。v2 直接对接内置侧边栏：
+> 不再需要、也不支持第三方侧边栏插件。
 
 ## 功能
 
-- **📚 LLM Wiki 侧边栏页签** — 分区页面目录（entities / concepts / comparisons /
-  queries），按 slug/标题/标签搜索，质量标记（`conf: low`、`contested` 争议），一键经
-  `betterSidebar.openFile` 打开，另有从磁盘重新读取 wiki 的刷新按钮。
-- **原生 markdown 查看器** — wiki 页面经由 dsh-better-sidebar 内置 markdown 查看器渲染
-  （Mermaid、shiki、KaTeX、TOC、内嵌 HTML），保留原生预览/编辑工具栏与 Ctrl/Cmd+S 保存。
-  不替换原生查看器的任何行为；插件只对其输出做装饰。
-- **可点击的 `[[wikilinks]]`** — 预览模式的 DOM 装饰将 `[[目标]]` / `[[目标|别名]]` 对
-  wiki map 解析并经 `openFile` 跳转（从不修改页面文本，编辑/保存始终安全）。无法解析的
-  链接以删除线渲染并带提示。
-- **可点击的溯源与站内相对 `.md` 链接** — 溯源标记（`^([来源](raw/...))`）与任何站内相对
-  markdown 链接在预览中可点击，经与目录页相同的 `openFile` 通路打开。共享 markdown 渲染器
-  会丢弃相对链接目标，因此插件改用「源码解析链接 ↔ 渲染标签文本」配对——从不改写
-  `fp.content`，编辑模式保存逐字节不变。
+- **📚 LLM Wiki 侧边栏页签** — 分区页面目录（entities / concepts / comparisons / queries），
+  按 slug/标题/标签搜索，质量标记（`conf: low`、`contested` 争议），一键以文件资源形式打开，
+  刷新按钮，并把产品自带的「刷新页面」快捷键绑定到本页签。
+- **wiki 页面渲染** — 位于 wiki 根内的 `.md` 由本插件自己的资源页签类型接管，使用
+  [markdown-it](https://github.com/markdown-it/markdown-it) 渲染（GFM 表格、代码围栏、引用、
+  列表、图片）。wiki 根之外的文件仍走产品原生文档预览，完全不受影响。
+- **可点击的 `[[wikilinks]]`** — `[[目标]]` / `[[目标|别名]]` 对 wiki map 解析；无法解析的
+  链接以删除线渲染并带提示。渲染源自源文本，不回写文件，磁盘内容永不被修改。
+- **标题锚点** — `[[页面#小节]]` 打开该页并滚动到对应标题，`[[#小节]]` 在当前页内跳转。
+  匹配同时接受标题原文与 slug（GitHub 风格、Unicode 感知，中文标题同样可用）。
+- **可点击的溯源与站内相对 `.md` 链接** — 溯源标记（`^([来源](raw/...))`）与任何相对
+  markdown 链接都经与目录页相同的资源通路打开。
 - **背链** — 每页底部 "🔗 Linked here (N)" 栏。
+- **源码 / 预览切换** — 不离开侧边栏即可查看原始 markdown（含 frontmatter）；frontmatter
+  字段在预览上方以紧凑标签行显示。
 - **Lint 报告** — 完整 12 项检查（断链、孤儿页、index 完整性、frontmatter 校验、过期页面、
-  争议标记、质量信号、sha256 源漂移、页面体积、标签分类、log 轮转），按严重级别分组；
-  error+warn 数量显示为页签徽标。同样检查可通过打包的 `scripts/wiki_lint.py` 在 CLI 使用。
+  争议标记、质量信号、sha256 源漂移、页面体积、标签分类、log 轮转），按严重级别分组。同样
+  检查可通过打包的 `scripts/wiki_lint.py` 在 CLI 使用。
+- **一个工作区多个 wiki** — 除默认 `wiki/` 外，页签自动发现形似 wiki 的同级目录（含
+  `SCHEMA.md`/`index.md` 且有分区或 `raw/` 目录），并在页签头部提供切换器；页面渲染按
+  「最长前缀匹配」跟随文件所属的 wiki 根。额外位置可用插件的 `wikiRoots` 配置显式注册
+  （见下方「多 wiki」）。
 - **内置 `llm-wiki` skill** — `skills/llm-wiki/SKILL.md` + `scripts/wiki_lint.py` 由专属的
   `dsh-skill-filesystem` 实例挂载并限定在本包目录，插件与其 skill 作为整体安装/卸载。
 
 ## 环境要求
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 0.1.2-rc.1+
-- [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) ≥ 0.16.0（`openFile`
-  能力；实测 0.18.0）
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，需带内置右侧边栏
+  （`@deepseek-ai/dsh-client-ui-sidebar-right`，0.1.7-rc.2 或更新）
 - Node.js ≥ 20
+
+无需任何第三方侧边栏插件。`dsh-better-sidebar` 必须**不要**安装：它自带侧边栏，会与内置
+侧边栏冲突。
 
 ## 安装
 
-wiki 位于 `<会话工作区>/wiki`（侧边栏文件路由强制工作区围栏，工作区内为受支持位置）。
+默认 wiki 位于 `<会话工作区>/wiki`（侧边栏文件路由强制工作区围栏，工作区内为受支持位置）。
+其他 wiki 可放在工作区内任意目录——见[多 wiki](#多-wiki)。
 
 ### 从 GitHub（官方 bundle CLI）
 
@@ -61,11 +74,15 @@ dsh plugin --profile web add llm-wiki-sidebar
 
 ### 本地开发安装
 
+浏览器端实际加载的 `lib/client.js` 是生成产物（内联了 vendored 的 markdown-it），clone
+之后先生成一次：
+
 ```sh
 git clone https://github.com/ApeInCodeMountain/llm-wiki-sidebar
-cp -r llm-wiki-sidebar ~/.dsh/profiles/web/
+cd llm-wiki-sidebar && node scripts/build-client.mjs
+cp -r . ~/.dsh/profiles/web/llm-wiki-sidebar
 ln -sfn ../llm-wiki-sidebar ~/.dsh/profiles/web/node_modules/llm-wiki-sidebar
-# 注册为 link: 依赖，让 pnpm 保持软链
+# 注册为 link: 依赖，让 pnpm 保留该软链
 node -e "const fs=require('fs');const f=process.env.HOME+'/.dsh/profiles/web/package.json';const j=JSON.parse(fs.readFileSync(f));j.dependencies['llm-wiki-sidebar']='link:llm-wiki-sidebar';fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
 ```
 
@@ -73,39 +90,88 @@ node -e "const fs=require('fs');const f=process.env.HOME+'/.dsh/profiles/web/pac
 
 ### 卸载
 
-用 `dsh plugin --profile web remove llm-wiki-sidebar` 移除（或从
-`~/.dsh/profiles/web/cordis.patch.yml` 删除两行、从 profile 的 `package.json` 删除依赖、
-删除 `node_modules/llm-wiki-sidebar` 软链与 `~/.dsh/profiles/web/llm-wiki-sidebar` 目录），
-重启 DSH。卸载同时撤下内置的 `llm-wiki` skill（它就在插件目录内）。
+用 `dsh plugin --profile web remove llm-wiki-sidebar` 移除（或手动删除
+`~/.dsh/profiles/web/cordis.patch.yml` 中的两行、profile `package.json` 中的依赖项、
+`node_modules/llm-wiki-sidebar` 软链以及 `~/.dsh/profiles/web/llm-wiki-sidebar` 目录）；
+重启 DSH。卸载会一并撤下打包的 `llm-wiki` skill（它就在插件目录内）。
 
 ## 使用
 
-1. 对 agent 说：“帮我在这个工作区初始化一个 wiki”——内置 `llm-wiki` skill 会创建 `wiki/`
-   （`SCHEMA.md`、`index.md`、`log.md` 与分层目录），随后导入来源。
-2. 打开侧边栏的 **📚 LLM Wiki** 页签：目录、搜索与 **Lint** 按钮。
-3. 打开任意页面进入原生预览——`[[wikilinks]]`、溯源链接与背链均可点击；在侧边栏编辑即直接
-   写盘（记得 bump `updated`）。
+1. 对 agent 说：“帮我在这个工作区初始化一个 wiki”——内置的 `llm-wiki` skill 会创建
+   `wiki/`（`SCHEMA.md`、`index.md`、`log.md` 与分层目录）并开始 ingest 源材料。
+2. 打开右侧边栏：引导页上的 **📚 LLM Wiki** 入口（或其页签）显示目录、搜索与 **体检** 按钮。
+3. 点击某个页面：它以 wiki 页面页签打开，`[[wikilinks]]`、溯源链接与背链均可点击。用
+   **源码** 查看原始 markdown。
+4. 想要第二个知识库？用相同的分层结构建一个同级目录（惯例：`wiki-<主题>/`）——侧边栏会自动
+   发现它，页签头部出现 wiki 切换器。每个 wiki 有独立的 slug 命名空间；跨 wiki 引用请用
+   相对 `.md` 链接。
+
+## 多 wiki
+
+一个工作区可以放多个互相独立的知识库。宿主按以下顺序合并三类来源（按根去重）：
+
+1. **默认** — `<工作区>/wiki`，始终列出；只存在它时界面不显示切换器。
+2. **插件配置** — 插件行 `config:` 中的 `wikiRoots`（工作区相对路径，或工作区内绝对路径）。
+   显式注册的根即使尚未创建也会列出（`exists: false`），且不受 `exclude` 影响。
+3. **自动发现** — 工作区下深度 1 的、形似 wiki 的目录：含 `SCHEMA.md` 或 `index.md`，**且**
+   含 `entities/ concepts/ comparisons/ queries/ raw/` 中至少一个，因此普通项目目录不会被
+   误报。`exclude`（basename 列表）可跳过嘈杂目录。
+
+文件归属于「最长匹配」的已注册根，因此 wikilink、溯源链接与背链在每个 wiki 中都可用。所有
+wiki 根都会被校验必须留在会话工作区内（`lib/wiki-root.js`）——越界路径一律拒绝。
+`wiki_lint.py` 以 wiki 根为参数，因此每个 wiki 各自体检。
+
+在 `~/.dsh/profiles/web/cordis.patch.yml` 中配置示例：
+
+```yaml
+- insert:
+    - id: llm-wiki-sidebar
+      name: 'llm-wiki-sidebar'
+      config:
+        wikiRoots: ['wiki-game', 'kb/research']
+        exclude: ['node_modules', 'archive']
+```
+
+## 如何接入内置侧边栏
+
+| 组成 | 扩展点 |
+|---|---|
+| 浏览 + 体检页签 | page 类型 `llm-wiki`，经 `ctx.sidebarRightTabs.register` 注册，body 注册进 keyed `sidebar.right.pane.tab` 座位 |
+| wiki 页面渲染 | 资源类型 `llm-wiki-page`，经 `ctx.sidebarRightTabs.register`（`dsh-resource://file/**` + `canOpen` 限定 wiki `.md`），同一个 body 座位 |
+| 打开页面 | `tab.actions.openResource(dsh-resource://file/session/<sessionId>/<path>)` |
+| 页面文本 | `ctx.remote.workspaceFiles.read`（分页行读取，受沙箱约束） |
+| 目录 / Lint / map / wiki 注册表 | 本插件自己的宿主路由（见下） |
+
+只接管 wiki `.md`；其他地址一律保留产品原生文档预览。插件从不读取或改写其它插件的 DOM。
 
 ## 路由（宿主半边）
 
 | 路由 | 请求体 | 用途 |
 |---|---|---|
-| `POST /llm-wiki/api/scan` | `{ cwd }` | wiki 页面目录 |
-| `POST /llm-wiki/api/lint` | `{ cwd }` | lint 报告 |
-| `POST /llm-wiki/api/map` | `{ cwd }` | slug→页面映射 + 背链图 + raw 索引 |
+| `POST /llm-wiki/api/wikis` | `{ cwd }` | 工作区暴露的 wiki 根（默认 + 配置 + 发现） |
+| `POST /llm-wiki/api/scan` | `{ cwd, wiki? }` | wiki 页面目录 |
+| `POST /llm-wiki/api/lint` | `{ cwd, wiki? }` | 体检报告 |
+| `POST /llm-wiki/api/map` | `{ cwd, wiki? }` | slug→页面映射 + 背链图 + raw 索引 |
 
-所有路由强制与 `/api` 网关相同的浏览器信任围栏（loopback/可信 Host + 同源标记），且只经
-沙箱感知的 `fs` 服务读取。插件从不写盘。
+scan/lint/map 的 `wiki` 可省略：省略时选默认 `<cwd>/wiki`；否则为经 `resolveWikiRoot()`
+解析的工作区相对或工作区绝对根。
+
+所有路由都强制与 `/api` 网关相同的浏览器信任围栏（loopback/受信 Host + 同源标记），并且
+只通过沙箱感知的 `fs` 服务读取。插件从不写盘。
 
 ## 开发
 
 ```sh
-node --check lib/client.js && node --check lib/index.js   # 语法
-node test/impl.test.mjs                                   # 单元 + 回归（无需 DOM）
+node scripts/build-client.mjs                              # 由 lib/client.src.js 重新生成 lib/client.js
+node --check lib/client.js && node --check lib/index.js && node --check lib/wiki-root.js
+node test/impl.test.mjs                                    # 单元 + 回归（无需浏览器）
 ```
 
-可点击链接管线的设计说明（为什么采用「源码链接 ↔ 渲染标签」配对而非拦截锚点）见
-[`docs/design-source-link-navigation-v2.md`](docs/design-source-link-navigation-v2.md)。
+`lib/client.js` 是**生成产物**：请改 `lib/client.src.js`，然后跑构建。vendored 的
+markdown-it 构建产物与其 MIT 许可证文本在 `lib/vendor/`。
+
+v1 那套 DOM 文本配对流水线的设计文档仅作为历史保留在仓库里，已不再描述当前实现：v2 改为
+「渲染而非给别的插件打 DOM 补丁」，该流水线已随 better-sidebar 依赖一并移除。
 
 ## 许可证
 
@@ -114,9 +180,12 @@ node test/impl.test.mjs                                   # 单元 + 回归（�
 ## 致谢
 
 - [Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
-  与 hermes-agent 项目的 MIT `llm-wiki` skill——本包 `skills/llm-wiki` 是该模式的 DSH 版。
+  与 hermes-agent 项目中 MIT 许可的 `llm-wiki` skill——本包内置的 `skills/llm-wiki`
+  是该模式的 DSH 版本。
+- [markdown-it](https://github.com/markdown-it/markdown-it)（MIT）——用于 wiki 页面渲染，
+  已 vendored 进浏览器 bundle；许可证随包提供于 `lib/vendor/markdown-it.LICENSE`。
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（MIT）——宿主运行时；
-  `lib/index.js` 中的浏览器信任围栏是 `@deepseek-ai/dsh-client-connection`（MIT）里 `/api`
-  网关围栏的行为级移植。
-- [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（MIT）——本插件扩展
-  的侧边栏工作台，`betterSidebar` 服务的提供方。
+  `lib/index.js` 中的浏览器信任围栏是对 `@deepseek-ai/dsh-client-connection`（MIT）中
+  `/api` 网关围栏的行为级移植。
+- [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（MIT）——v1.x 扩展的
+  侧边栏插件；因 DSH 已自带侧边栏，v2 不再依赖它。

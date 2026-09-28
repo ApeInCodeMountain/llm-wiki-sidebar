@@ -1,5 +1,10 @@
-// 实现级测试：不经文档提取，直接加载实施后的 lib/client.js（ModuleLoader stub），
-// 对 exports._internal 跑与 test-mdlink-v2.mjs 等价的 6 组断言。
+// Implementation tests for the DeepSeek-Harness-native sidebar build.
+//
+// Loads the built lib/client.js through a ModuleLoader stub (no browser) and
+// exercises the pure surface plus the markdown pipeline. The plugin no longer
+// touches another plugin's DOM: wiki pages are rendered by markdown-it with a
+// `[[wikilink]]` rule, and navigation is a resource open, so the old
+// decoration/pairing tests are replaced by rendering and address tests.
 import { readFileSync, existsSync } from "node:fs";
 import assert from "node:assert";
 
@@ -18,247 +23,363 @@ const windowStub = {
 };
 new Function("window", src)(windowStub);
 assert.ok(exports_, "factory did not return module.exports");
-assert.equal(exports_.inject[0], "betterSidebar", "inject preserved");
+assert.deepEqual(
+	exports_.inject,
+	["slots", "locale", "sidebarRightTabs", "remote", "remote.workspaceFiles"],
+	"cordis service injection",
+);
 const internal = exports_._internal;
-for (const k of ["makeLinkResolver", "collapsePath", "plainify", "collectSourceLinks", "decorateMarkdownLinks", "unwrapMdLinks"]) {
+for (const k of [
+	"collapsePath", "makeLinkResolver", "pickWikiRoot",
+	"parseFileAddress", "sessionFileAddress", "isWikiMdPath", "warmWikiRoots",
+	"makeWikiTargetResolver", "parseFrontmatter", "slugify", "splitFragment",
+	"findHeading", "getMd",
+]) {
 	assert.equal(typeof internal[k], "function", "_internal." + k + " exported");
 }
-const { plainify, collectSourceLinks, makeLinkResolver, decorateMarkdownLinks, unwrapMdLinks } = internal;
+const {
+	makeLinkResolver, pickWikiRoot, parseFileAddress, sessionFileAddress,
+	isWikiMdPath, warmWikiRoots, makeWikiTargetResolver, parseFrontmatter,
+	slugify, splitFragment, findHeading, getMd,
+} = internal;
 console.log("LOAD lib/client.js via ModuleLoader stub — PASS (_internal complete)");
 
-// ---- mini DOM stub (same fidelity as the doc-level test) ----
-class Doc {
-	createTextNode(v) { return new TextNode(v); }
-	createElement(tag) { return new Element(tag); }
-	createDocumentFragment() { const f = new Element("#fragment"); f.nodeType = 11; return f; }
+// ---- A. file addresses: grammar, encoding, round trip ----
+{
+	const addr = sessionFileAddress("s-1", "/home/roy/dsh_work/wiki/concepts/a b.md");
+	assert.equal(addr, "dsh-resource://file/session/s-1//home/roy/dsh_work/wiki/concepts/a%20b.md");
+	assert.deepEqual(parseFileAddress(addr), {
+		scope: "session", sessionId: "s-1", path: "/home/roy/dsh_work/wiki/concepts/a b.md",
+	});
+	assert.deepEqual(parseFileAddress("dsh-resource://file/session/s1/wiki2/entities/x.md"), {
+		scope: "session", sessionId: "s1", path: "wiki2/entities/x.md",
+	});
+	assert.deepEqual(parseFileAddress("dsh-resource://file/absolute/home/ys/notes.txt"), {
+		scope: "absolute", path: "/home/ys/notes.txt",
+	});
+	// `#` and `?` in a filename survive the round trip
+	const odd = sessionFileAddress("s", "wiki/concepts/a#b?c.md");
+	assert.equal(parseFileAddress(odd).path, "wiki/concepts/a#b?c.md");
+	assert.equal(parseFileAddress("https://example.com/x.md"), null);
+	assert.equal(parseFileAddress("dsh-resource://other/session/s/x.md"), null);
+	console.log("A. file address grammar + encoding — PASS");
 }
-class TextNode {
-	constructor(v) { this.nodeType = 3; this.nodeValue = v; this.parentNode = null; this.parentElement = null; }
-	get textContent() { return this.nodeValue; }
-	set textContent(v) { this.nodeValue = v; }
+
+// ---- B. resource-type routing: only wiki markdown is claimed ----
+{
+	assert.equal(isWikiMdPath("wiki/concepts/a.md"), true, "default wiki, relative");
+	assert.equal(isWikiMdPath("/home/roy/dsh_work/wiki2/entities/a.md"), true, "sibling wiki, absolute");
+	assert.equal(isWikiMdPath("/home/roy/dsh_work/kb/research/x.md"), false, "unknown custom root before warming");
+	warmWikiRoots([{ root: "/home/roy/dsh_work/kb/research" }]);
+	assert.equal(isWikiMdPath("/home/roy/dsh_work/kb/research/x.md"), true, "custom root after warming");
+	assert.equal(isWikiMdPath("/home/roy/dsh_work/docs/README.md"), false, "ordinary markdown stays native");
+	assert.equal(isWikiMdPath("wiki/concepts/a.txt"), false, "only markdown");
+	assert.equal(isWikiMdPath("wiki/concepts/a.md.bak"), false, "suffix match is exact");
+	console.log("B. isWikiMdPath routing — PASS");
 }
-class Element {
-	constructor(tag) {
-		this.nodeType = 1; this.tagName = tag.toUpperCase(); this.childNodes = [];
-		this.parentNode = null; this.ownerDocument = new Doc();
-		this.parentElement = null;
-		this._attrs = {}; this._cls = new Set(); this.className = "";
-		this._listeners = {};
-	}
-	set className(v) { this._cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
-	get className() { return [...this._cls].join(" "); }
-	get classList() { const s = this._cls; return { contains: (c) => s.has(c) }; }
-	matches(sel) {
-		for (const part of sel.split(",")) {
-			const p = part.trim();
-			if (p.startsWith(".")) { if (this._cls.has(p.slice(1))) return true; }
-			else if (p.startsWith("#")) { if (this._attrs.id === p.slice(1)) return true; }
-			else if (this.tagName === p.toUpperCase()) return true;
-		}
-		return false;
-	}
-	closest(sel) { let e = this; while (e) { if (e.matches && e.matches(sel)) return e; e = e.parentNode; } return null; }
-	contains(n) { for (let e = n; e; e = e.parentNode) if (e === this) return true; return false; }
-	setAttribute(k, v) { this._attrs[k] = v; if (k === "class") this.className = v; }
-	getAttribute(k) { return this._attrs[k] ?? null; }
-	addEventListener(t, f) { (this._listeners[t] ??= []).push(f); }
-	click() { for (const f of this._listeners.click ?? []) f({ preventDefault() {}, stopPropagation() {} }); }
-	get textContent() { return this.childNodes.map((c) => c.textContent).join(""); }
-	set textContent(v) { this.childNodes = [new TextNode(v)]; this.childNodes[0].parentNode = this; }
-	appendChild(c) { return this.insertBefore(c, null); }
-	insertBefore(c, ref) {
-		const kids = c.nodeType === 11 ? [...c.childNodes] : [c];
-		for (const k of kids) { k.parentNode = this; k.parentElement = this; }
-		const i = ref === null ? this.childNodes.length : this.childNodes.indexOf(ref);
-		this.childNodes.splice(i < 0 ? this.childNodes.length : i, 0, ...kids);
-		return c;
-	}
-	replaceChild(nu, old) {
-		const i = this.childNodes.indexOf(old);
-		if (i < 0) throw new Error("replaceChild: node not a child");
-		const kids = nu.nodeType === 11 ? [...nu.childNodes] : [nu];
-		this.childNodes.splice(i, 1, ...kids);
-		old.parentNode = null;
-		for (const k of kids) { k.parentNode = this; k.parentElement = this; } // real DOM: fragment children reparent on insertion
-	}
-	removeChild(c) { const i = this.childNodes.indexOf(c); if (i >= 0) this.childNodes.splice(i, 1); }
-	querySelectorAll(sel) {
-		if (sel !== "[data-llmw-mdlink]") throw new Error("stub only supports [data-llmw-mdlink]");
-		const out = [];
-		(function walk(n) { for (const c of n.childNodes) { if (c.nodeType === 1) { if (c._attrs["data-llmw-mdlink"]) out.push(c); walk(c); } } })(this);
-		return out;
-	}
+
+// ---- C. [[wikilink]] resolution against the wiki map ----
+{
+	const map = {
+		pages: [
+			{ slug: "worldbuilding", path: "/w/wiki/concepts/worldbuilding.md", title: "世界构建" },
+			{ slug: "a", path: "/w/wiki/entities/a.md", title: "A页" },
+		],
+		raws: [{ rel: "raw/articles/x.md", path: "/w/wiki/raw/articles/x.md" }],
+	};
+	const resolve = makeWikiTargetResolver(map, "/w/wiki/");
+	assert.deepEqual(resolve("worldbuilding"), { kind: "page", path: "/w/wiki/concepts/worldbuilding.md", title: "世界构建" });
+	assert.deepEqual(resolve("concepts/worldbuilding"), { kind: "page", path: "/w/wiki/concepts/worldbuilding.md", title: "世界构建" });
+	assert.deepEqual(resolve("entities/a.md"), { kind: "page", path: "/w/wiki/entities/a.md", title: "A页" });
+	assert.deepEqual(resolve("worldbuilding#段落"), { kind: "page", path: "/w/wiki/concepts/worldbuilding.md", title: "世界构建" });
+	assert.deepEqual(resolve("raw/articles/x.md"), { kind: "file", path: "/w/wiki/raw/articles/x.md", title: "raw/articles/x.md" });
+	assert.equal(resolve("nope"), null);
+	console.log("C. makeWikiTargetResolver — PASS");
 }
-const doc = new Doc();
 
-// ---- preview DOM mirroring MarkdownText's rendering ----
-const P = (kids) => { const p = doc.createElement("p"); for (const k of kids) p.appendChild(k); return p; };
-const T = (v) => doc.createTextNode(v);
-const wlink = (label) => { const s = doc.createElement("span"); s.className = "llmw-wlink"; s.textContent = label; return s; };
-
-const root = doc.createElement("div");
-root.appendChild(P([T("神话要渗入世界而非停留于背景：环境叙事反复强化^("), T("来源"), T(")。")]));
-root.appendChild(P([T("相关概念见"), wlink("worldbuilding"), T("一章^"), T("来源"), T("。")]));
-{ const pre = doc.createElement("pre"); const code = doc.createElement("code"); code.appendChild(T("[a](b.md)")); pre.appendChild(code); root.appendChild(pre); }
-root.appendChild(P([T("连续：^("), T("来源"), T(")^("), T("来源"), T(") 完。")]));
-root.appendChild(P([T("前段。")]));
-root.appendChild(P([T("^("), T("来源"), T(")继续正文")])); // 段首标记：before 以 "\n^(" 结尾（段落边界）
-{ const pre2 = doc.createElement("pre"); pre2.appendChild(T("围栏里也有 来源 字样")); root.appendChild(pre2); }
-
-const content = [
-	"神话要渗入世界而非停留于背景：环境叙事反复强化^([来源](raw/articles/gameres-worldview-lego.md))。",
-	"相关概念见[[worldbuilding]]一章^[来源](raw/articles/wikipedia-worldbuilding-en.md)。",
-	"```",
-	"[a](b.md)",
-	"```",
-	"连续：^([来源](a.md))^([来源](b.md)) 完。",
-	"前段。",
-	"^([来源](z.md))继续正文",
-].join("\n");
-
-const opts = {
-	wikiRoot: "/w/wiki/",
-	pageDir: "/w/wiki/concepts/",
-	pages: [
-		{ slug: "a", path: "/w/wiki/entities/a.md", title: "A页" },
-		{ slug: "b", path: "/w/wiki/entities/b.md", title: "B页" },
-		{ slug: "z", path: "/w/wiki/queries/z.md", title: "Z页" },
-	],
-	raws: [
-		{ rel: "raw/articles/gameres-worldview-lego.md", path: "/w/wiki/raw/articles/gameres-worldview-lego.md" },
-		{ rel: "raw/articles/wikipedia-worldbuilding-en.md", path: "/w/wiki/raw/articles/wikipedia-worldbuilding-en.md" },
-	],
-};
-const opened = [];
-const resolveLink = makeLinkResolver(opts);
-const onOpenTarget = (t) => opened.push(t.path);
-
-// ---- A. collector ----
-const links = collectSourceLinks(content);
-assert.equal(links.length, 5, "collector: expect 5 links, got " + links.length);
-assert.deepEqual(links.map((l) => l.dest), [
-	"raw/articles/gameres-worldview-lego.md",
-	"raw/articles/wikipedia-worldbuilding-en.md",
-	"a.md", "b.md", "z.md",
-]);
-assert.ok(links[0].before.endsWith("^("));
-assert.ok(links[1].before.endsWith("一章^") && links[1].before.includes("worldbuilding"));
-assert.ok(links[3].before.endsWith("))^("));
-assert.ok(links[4].before.endsWith("\n^("));
-console.log("A. collectSourceLinks — PASS");
-
-// ---- B. resolver ----
-assert.deepEqual(resolveLink("raw/articles/gameres-worldview-lego.md"), { kind: "file", path: "/w/wiki/raw/articles/gameres-worldview-lego.md", title: "raw/articles/gameres-worldview-lego.md" });
-assert.deepEqual(resolveLink("a.md"), { kind: "page", path: "/w/wiki/entities/a.md", title: "A页" });
-assert.equal(resolveLink("https://x.com"), null);
-assert.equal(resolveLink("raw/not-in-map.md"), null);
-assert.equal(plainify("见[[worldbuilding]]一章"), "见worldbuilding一章");
-assert.equal(plainify("[[page|别名]]"), "别名");
-console.log("B. makeLinkResolver + plainify — PASS");
-
-// ---- C. end-to-end decoration ----
-const n = decorateMarkdownLinks(root, links, resolveLink, onOpenTarget);
-assert.equal(n, 5, "decorated count, got " + n);
-const spans = root.querySelectorAll("[data-llmw-mdlink]");
-assert.equal(spans.length, 5, "span count");
-assert.deepEqual(spans.map((s) => s.title), [
-	"→ raw/articles/gameres-worldview-lego.md",
-	"→ raw/articles/wikipedia-worldbuilding-en.md",
-	"→ A页", "→ B页", "→ Z页",
-]);
-for (const s of spans) {
-	assert.equal(s.tagName, "SPAN");
-	assert.equal(s.textContent, "来源");
-	assert.notEqual(s.parentNode.tagName, "PRE");
+// ---- D. markdown pipeline: wikilinks, code masking, embeds, images ----
+{
+	const md = getMd();
+	const api = {
+		resolve: (target) => (String(target).split("#")[0] === "x" ? { path: "/w/wiki/x.md", title: "X页" } : null),
+		imageUrl: (dest) => (dest === "raw/img/a.png" ? "MEDIA(raw/img/a.png)" : undefined),
+	};
+	const html = md.render([
+		"见 [[x]]、[[x|别名]] 与 [[missing]]。",
+		"",
+		"行内 `[[x]]` 不链接。",
+		"",
+		"```",
+		"[[x]]",
+		"```",
+		"",
+		"![[embed]] 保持字面量。",
+		"",
+		"![alt](raw/img/a.png)",
+		"",
+		"![remote](https://example.com/a.png)",
+	].join("\n"), { llmwiki: api });
+	assert.ok(html.includes('data-llmwiki="x"') === false && html.includes('data-llmw-wiki="x"'), "resolved wikilink is an anchor");
+	assert.ok(html.includes(">别名</a>"), "alias label rendered");
+	assert.ok(html.includes("llmw-wlink-miss"), "unresolved wikilink marked");
+	assert.ok(html.includes("<code>[[x]]</code>"), "inline code untouched");
+	assert.ok(html.includes("[[x]]\n</code>"), "fenced code untouched");
+	assert.ok(html.includes("![[embed]]"), "embed left literal");
+	assert.ok(html.includes('src="MEDIA(raw/img/a.png)"'), "local image rewritten");
+	assert.ok(html.includes('src="https://example.com/a.png"'), "remote image untouched");
+	assert.ok(!html.includes("<script"), "raw HTML never enters the DOM");
+	// `[[page#section]]` labels the page, not the fragment; the fragment still reaches the click handler.
+	const anchorHtml = md.renderInline("[[x#某节]]", { llmwiki: api });
+	assert.ok(anchorHtml.includes('data-llmw-wiki="x#某节"'), "fragment kept in the target");
+	assert.ok(anchorHtml.includes(">x</a>"), "fragment stripped from the label");
+	// Labels are escaped, so markdown-it-wikilinks' raw-HTML interpolation cannot happen here.
+	assert.ok(md.renderInline("[[x|<img src=x onerror=alert(1)>]]", { llmwiki: api }).includes("&lt;img"), "labels are escaped");
+	// `[[#section]]` is an in-page anchor: it never goes through resolution.
+	const selfAnchor = md.renderInline("[[#某节]]", { llmwiki: api });
+	assert.ok(selfAnchor.includes('data-llmw-frag="某节"'), "self anchor carries the fragment");
+	assert.ok(selfAnchor.includes(">某节</a>"), "self anchor labels the fragment");
+	assert.ok(!selfAnchor.includes("llmw-wlink-miss"), "self anchor is not a broken link");
+	console.log("D. markdown-it + wikilink rule — PASS");
 }
-assert.equal(spans[4].parentNode.childNodes[1], spans[4], "fuzzy-boundary label wrapped after '^(' literal");
-assert.ok(root.childNodes[2].textContent.includes("[a](b.md)"), "fence text untouched");
-console.log("C. end-to-end decoration — PASS");
 
-// ---- D. click behavior ----
-spans[0].click();
-assert.deepEqual(opened, ["/w/wiki/raw/articles/gameres-worldview-lego.md"]);
-spans[3].click();
-assert.deepEqual(opened, ["/w/wiki/raw/articles/gameres-worldview-lego.md", "/w/wiki/entities/b.md"]);
-console.log("D. click → openFile targets — PASS");
+// ---- E. frontmatter split ----
+{
+	const parsed = parseFrontmatter("---\ntitle: 神话\ntags: [a, b]\ncontested: true\n---\n正文 [[x]]\n");
+	assert.equal(parsed.meta.title, "神话");
+	assert.deepEqual(parsed.meta.tags, ["a", "b"]);
+	assert.equal(parsed.meta.contested, true);
+	assert.equal(parsed.body, "正文 [[x]]\n");
+	assert.equal(parseFrontmatter("no frontmatter").meta, null);
+	console.log("E. parseFrontmatter — PASS");
+}
 
-// ---- E. re-run self-healing ----
-unwrapMdLinks(root);
-assert.equal(root.querySelectorAll("[data-llmw-mdlink]").length, 0);
-root.childNodes[0].childNodes[0].nodeValue = "神话要渗入世界而非停留于背景：环境叙事反复强化^(";
-const n2 = decorateMarkdownLinks(root, links, resolveLink, onOpenTarget);
-assert.equal(n2, 5, "second pass re-wraps all 5, got " + n2);
-assert.equal(root.querySelectorAll("[data-llmw-mdlink]").length, 5, "no duplicates after second pass");
-console.log("E. re-run self-healing — PASS");
+// ---- F. multi-wiki: host-side wiki-root resolution (lib/wiki-root.js) ----
+{
+	const { resolveWikiRoot } = await import("../lib/wiki-root.js");
+	const ok = [
+		["/w", undefined, "/w/wiki"],
+		["/w", "", "/w/wiki"],
+		["/w", "wiki-game", "/w/wiki-game"],
+		["/w", "kb/research", "/w/kb/research"],
+		["/w", "/w/wiki-game/", "/w/wiki-game"],
+		["/w", "a/../wiki2", "/w/wiki2"],
+	];
+	for (const [cwd, wiki, want] of ok) {
+		assert.equal(resolveWikiRoot(cwd, wiki), want, "resolveWikiRoot(" + JSON.stringify(cwd) + ", " + String(wiki) + ")");
+	}
+	const bad = [
+		["/w", "../escape"], ["/w", "/etc"], ["/w", "file:///etc"],
+		["", "wiki"], ["/w", "."], ["/w", "a/../../out"], ["/w", 42],
+	];
+	for (const [cwd, wiki] of bad) {
+		assert.throws(() => resolveWikiRoot(cwd, wiki), "expected refusal: " + String(wiki));
+	}
+	console.log("F. resolveWikiRoot (default/relative/absolute + workspace containment) — PASS");
+}
 
-// ---- F. prose disambiguation ----
-const root2 = doc.createElement("div");
-root2.appendChild(P([T("本章讲述来源的流变，见下。")]));
-root2.appendChild(P([T("而来源这个概念最重要。")]));
-root2.appendChild(P([T("定论^("), T("来源"), T(")。")]));
-const links2 = collectSourceLinks("本章讲述来源的流变，见下。\n而来源这个概念最重要。\n定论^([来源](raw/articles/x.md))。");
-assert.equal(links2.length, 1);
-const resolveX = (d) => (d === "raw/articles/x.md" ? { kind: "file", path: "/w/wiki/raw/articles/x.md", title: "raw/articles/x.md" } : null);
-assert.equal(decorateMarkdownLinks(root2, links2, resolveX, () => {}), 1);
-const spans3 = root2.querySelectorAll("[data-llmw-mdlink]");
-assert.equal(spans3.length, 1);
-assert.equal(spans3[0].parentNode, root2.childNodes[2], "the REAL marker paragraph got the span, not the prose");
-console.log("F. prose disambiguation — PASS");
+// ---- G. multi-wiki: pickWikiRoot longest-prefix ownership ----
+{
+	const wikis = [
+		{ root: "/w/wiki", name: "wiki" },
+		{ root: "/w/wiki-game", name: "wiki-game" },
+	];
+	assert.equal(pickWikiRoot("/w/wiki-game/entities/a.md", wikis, "/w/wiki/"), "/w/wiki-game/", "sibling wiki wins");
+	assert.equal(pickWikiRoot("/w/wiki/concepts/b.md", wikis, null), "/w/wiki/", "default wiki matches");
+	assert.equal(pickWikiRoot("/w/other/x.md", wikis, "/w/wiki/"), "/w/wiki/", "non-wiki file falls back to the legacy root");
+	assert.equal(pickWikiRoot("/w/wiki-game/raw/r.md", null, "/w/wiki/"), "/w/wiki/", "registry unavailable → v1 fallback");
+	assert.equal(pickWikiRoot("/w/wiki-extra/x.md", [{ root: "/w/wiki" }], null), null, "prefix boundary: 'wiki' must not own 'wiki-extra/…'");
+	assert.equal(pickWikiRoot("/w/wiki-game/a.md", [{ root: "/w/wiki-game" }, { root: "/w" }], null), "/w/wiki-game/", "longest prefix wins");
+	console.log("G. pickWikiRoot longest-prefix ownership — PASS");
+}
 
-// ---- G. real-wiki smoke: runs only when the author's local wiki is present ----
+// ---- H. multi-wiki: resolver generalizes the wiki-dir strip ----
+{
+	const gResolve = makeLinkResolver({
+		wikiRoot: "/w/wiki-game/",
+		pageDir: "/w/wiki-game/concepts/",
+		pages: [{ slug: "a", path: "/w/wiki-game/entities/a.md", title: "A页" }],
+		raws: [{ rel: "raw/articles/g.md", path: "/w/wiki-game/raw/articles/g.md" }],
+	});
+	assert.deepEqual(gResolve("raw/articles/g.md"), { kind: "file", path: "/w/wiki-game/raw/articles/g.md", title: "raw/articles/g.md" }, "plain relative");
+	assert.deepEqual(gResolve("a.md"), { kind: "page", path: "/w/wiki-game/entities/a.md", title: "A页" }, "stem match");
+	assert.deepEqual(gResolve("/wiki-game/entities/a.md"), { kind: "page", path: "/w/wiki-game/entities/a.md", title: "A页" }, "site-absolute, non-wiki basename");
+	assert.deepEqual(gResolve("wiki-game/entities/a.md"), { kind: "page", path: "/w/wiki-game/entities/a.md", title: "A页" }, "root-relative, non-wiki basename");
+	const wResolve = makeLinkResolver({
+		wikiRoot: "/w/wiki/",
+		pageDir: "/w/wiki/concepts/",
+		pages: [
+			{ slug: "a", path: "/w/wiki/entities/a.md", title: "A页" },
+			{ slug: "z", path: "/w/wiki/queries/z.md", title: "Z页" },
+		],
+		raws: [
+			{ rel: "raw/articles/gameres-worldview-lego.md", path: "/w/wiki/raw/articles/gameres-worldview-lego.md" },
+			{ rel: "raw/articles/wikipedia-worldbuilding-en.md", path: "/w/wiki/raw/articles/wikipedia-worldbuilding-en.md" },
+		],
+	});
+	assert.deepEqual(wResolve("/wiki/queries/z.md"), { kind: "page", path: "/w/wiki/queries/z.md", title: "Z页" }, "site-absolute, default basename");
+	assert.deepEqual(wResolve("wiki/queries/z.md"), { kind: "page", path: "/w/wiki/queries/z.md", title: "Z页" }, "root-relative, default basename");
+	assert.equal(gResolve("/wiki/raw/articles/g.md"), null, "default-wiki site-absolute is not stripped inside wiki-game");
+	console.log("H. makeLinkResolver generalized wiki-dir stripping — PASS");
+}
+
+// ---- I. real-wiki smoke: runs only when the author's local wiki is present ----
 if (!existsSync("/home/roy/dsh_work/wiki/concepts/mythopoeia-foundation.md")) {
-	console.log("G. real-wiki smoke — SKIPPED (local wiki fixture not present)");
+	console.log("I. real-wiki smoke — SKIPPED (local wiki fixture not present)");
 } else {
-const realPages = [
-	["concepts/mythopoeia-foundation.md", "raw/articles/gcores-game-worldview-example.md"],
-	["concepts/worldbuilding.md", "raw/articles/gcores-weaving-world-latlon.md"],
-];
-const wikiRoot = "/home/roy/dsh_work/wiki/";
-const realContent = readFileSync(wikiRoot + "concepts/mythopoeia-foundation.md", "utf8");
-const realLinks = collectSourceLinks(realContent);
-assert.equal(realLinks.length, 5, "real page: 5 provenance links, got " + realLinks.length);
-assert.ok(realLinks.every((l) => l.label === "来源" && l.dest.startsWith("raw/articles/")), "all provenance-shaped");
-const realResolver = makeLinkResolver({
-	wikiRoot,
-	pageDir: wikiRoot + "concepts/",
-	pages: [{ slug: "mythopoeia-foundation", path: wikiRoot + "concepts/mythopoeia-foundation.md", title: "神话造世" }],
-	raws: realLinks.map((l) => ({ rel: l.dest, path: wikiRoot + l.dest })),
-});
-assert.equal(realResolver("raw/articles/gcores-game-worldview-example.md").kind, "file");
-assert.equal(realResolver("raw/articles/gcores-game-worldview-example.md").path, wikiRoot + "raw/articles/gcores-game-worldview-example.md");
-console.log("G. real-wiki smoke (mythopoeia-foundation.md) — PASS");
+	const wikiRoot = "/home/roy/dsh_work/wiki/";
+	const realContent = readFileSync(wikiRoot + "concepts/mythopoeia-foundation.md", "utf8");
+	const parsed = parseFrontmatter(realContent);
+	assert.ok(parsed.meta && parsed.meta.title, "frontmatter parsed");
+	const resolve = makeWikiTargetResolver({
+		pages: [{ slug: "mythopoeia-foundation", path: wikiRoot + "concepts/mythopoeia-foundation.md", title: "神话造世" }],
+		raws: parsed.meta.sources.map ? parsed.meta.sources.map((rel) => ({ rel, path: wikiRoot + rel })) : [],
+	}, wikiRoot);
+	const html = getMd().render(parsed.body, { llmwiki: { resolve, imageUrl: () => undefined } });
+	assert.ok(html.includes("raw/articles/"), "provenance .md links survive rendering");
+	assert.ok(html.includes("href="), "links are real anchors");
+	console.log("I. real-wiki smoke (mythopoeia-foundation.md) — PASS");
 }
 
-// ---- H. regression: CodeMirror source copy must never carry decorations ----
-// Real structure: .llmw-viewerhost hosts the HIDDEN CodeMirror source (raw
-// markdown with frontmatter/line-numbers/URLs) BEFORE the rendered preview.
-// The pairing must bind the PREVIEW labels only — never the editor copy.
-const cmRoot = doc.createElement("div");
-cmRoot.className = "cm-editor";
-const cmContent = doc.createElement("div");
-cmContent.className = "cm-content";
-cmRoot.appendChild(cmContent);
-cmContent.appendChild(T("---\ntitle: 神话奠基法\n---\n1 《死亡搁浅》有埃及神话的影子^([来源](raw/articles/gcores-game-worldview-example.md))。"));
-cmContent.appendChild(T("2 托尔金（他称之为\"次创造 Sub-Creation\"）^([来源](raw/articles/wikipedia-worldbuilding-en.md))。"));
-cmContent.appendChild(T("31 反复强化^([来源](raw/articles/gameres-worldview-lego.md))。"));
-cmContent.appendChild(T("36 神话只解释\"例外\"的来源^([来源](raw/articles/wikipedia-worldbuilding-en.md))。"));
-cmContent.appendChild(T("37 天然伏笔^([来源](raw/articles/gameres-worldview-lego.md))。"));
-const host3 = doc.createElement("div");
-host3.appendChild(cmRoot); // editor copy FIRST — the DOM-order pollution vector
-const preview3 = doc.createElement("div");
-host3.appendChild(preview3);
-preview3.appendChild(P([T("神话要渗入世界而非停留于背景：改用开场 CG、神庙建筑语言等**环境叙事**反复强化^("), T("来源"), T(")。")]));
-preview3.appendChild(P([T("《死亡搁浅》有埃及神话的影子^("), T("来源"), T(")。")]));
-preview3.appendChild(P([T("托尔金（他称之为\"次创造 Sub-Creation\"）^("), T("来源"), T(")。")]));
-preview3.appendChild(P([T("与世界默认按现实规律运作，神话只解释\"例外\"的来源^("), T("来源"), T(")。")]));
-preview3.appendChild(P([T("神话史天然充当\"史诗方块\"：神仙打架式的历史事件是换地图与续作的天然伏笔^("), T("来源"), T(")。")]));
-const links3 = collectSourceLinks(content);
-const n4 = decorateMarkdownLinks(host3, links3, resolveLink, () => {});
-assert.equal(n4, 5, "regression: preview labels wrapped, got " + n4);
-const spans4 = [...host3.querySelectorAll("[data-llmw-mdlink]")];
-assert.equal(spans4.length, 5, "exactly 5 spans");
-assert.ok(spans4.every((s) => !s.parentElement.closest(".cm-editor")), "no span inside the CodeMirror copy");
-assert.ok(spans4.every((s) => preview3.contains(s)), "all spans in the preview");
-console.log("H. CodeMirror copy excluded — PASS (preview wrapped, editor untouched)");
+// ---- J. plugin contract: apply() + first render, against a stubbed context ----
+// Catches the failure modes a browser would otherwise show as a blank slot:
+// a throwing apply(), a definition the sidebar rejects, or a component that
+// dereferences a missing prop on its first render.
+{
+	let hookIndex = 0;
+	const hookStore = [];
+	const ReactStub = {
+		createElement: (type, props, ...children) => ({ type, props, children }),
+		useState(initial) {
+			const at = hookIndex++;
+			if (!(at in hookStore)) hookStore[at] = typeof initial === "function" ? initial() : initial;
+			const set = (value) => { hookStore[at] = typeof value === "function" ? value(hookStore[at]) : value; };
+			return [hookStore[at], set];
+		},
+		useEffect() {},
+		useMemo(factory) { hookIndex++; return factory(); },
+		useCallback(fn) { hookIndex++; return fn; },
+		useRef(value) { hookIndex++; return { current: value }; },
+	};
+	let exports2 = null;
+	const documentStub = {
+		baseURI: "http://127.0.0.1:3080/",
+		head: { appendChild() {} },
+		createElement: () => ({ setAttribute() {}, remove() {}, textContent: "" }),
+	};
+	new Function("window", "document", src)(
+		{
+			__ModuleLoader__: {
+				load(def) {
+					exports2 = def.factory((name) => {
+						if (name === "react") return ReactStub;
+						throw new Error("unexpected require: " + name);
+					});
+				},
+			},
+		},
+		documentStub,
+	);
+
+	const types = [], slotRegs = [], locales = [];
+	const ctx = {
+		effect(fn) { const dispose = fn(); assert.equal(typeof dispose, "function", "effect returns a disposer"); return () => {}; },
+		locale: {
+			bind: (ns) => (key) => ns + ":" + key,
+			register: (ns, dicts) => { locales.push({ ns, dicts }); return () => {}; },
+		},
+		sidebarRightTabs: {
+			register(definition) { types.push(definition); return () => {}; },
+		},
+		slots: {
+			inject(key, callback) { assert.ok(key, "slots.inject needs an owner key"); callback(); return () => {}; },
+			register(options, Body) { slotRegs.push({ options, Body }); return () => {}; },
+		},
+		remote: {
+			workspaceFiles: {
+				read: async () => ({
+					ok: true,
+					value: {
+						absolutePath: "/w/wiki/concepts/a.md", version: "v1", offset: 1,
+						text: "---\ntitle: A\n---\n# A\n\n[[worldbuilding]]\n", lines: 5, eof: true,
+					},
+				}),
+			},
+		},
+	};
+	exports2.apply(ctx);
+
+	assert.equal(types.length, 2, "two tab types registered");
+	const browse = types.find((d) => d.kind === "llm-wiki");
+	const page = types.find((d) => d.kind === "llm-wiki-page");
+	assert.ok(browse && typeof browse.title === "function", "browse type");
+	assert.ok(Array.isArray(browse.guide) && browse.guide.length === 1, "browse contributes one guide entry");
+	assert.equal(page.priority, "extension");
+	assert.deepEqual(page.patterns, ["dsh-resource://file/**"]);
+	assert.equal(page.canOpen("dsh-resource://file/session/s/wiki/concepts/a.md"), true, "claims wiki markdown");
+	assert.equal(page.canOpen("dsh-resource://file/session/s/docs/README.md"), false, "leaves ordinary markdown native");
+	assert.equal(page.canOpen("dsh-resource://file/absolute/home/x/wiki/a.md"), false, "never claims a session-less address");
+	assert.equal(page.canOpen("dsh-resource://file/session/s/wiki/notes.txt"), false, "only markdown");
+	assert.ok(typeof page.title("dsh-resource://file/session/s/wiki/concepts/a.md") === "string", "page chip title");
+
+	assert.equal(slotRegs.length, 2, "two bodies registered");
+	for (const reg of slotRegs) {
+		assert.equal(reg.options.name, "sidebar.right.pane.tab");
+		assert.ok(reg.options.key === browse.id || reg.options.key === page.id, "body key matches a definition id");
+		assert.equal(reg.options.locale, "llmWiki");
+	}
+	assert.equal(locales.length, 1, "one locale namespace registered");
+	assert.ok(locales[0].dicts.en && locales[0].dicts.zh, "en + zh dictionaries");
+
+	const actions = { openResource() {}, bindCommands() { return () => {}; } };
+	const tabInfo = { useTabInfo: () => ({ tab: { contentId: "dsh-resource://file/session/s/wiki/concepts/a.md", actions } }) };
+	const common = {
+		t: (key) => key,
+		sessionId: "s",
+		useSessions: (select) => select({ byId: { s: { cwd: "/w" } } }),
+		useResource: () => ({ value: { absolutePath: "/w/wiki/concepts/a.md" } }),
+		...tabInfo,
+	};
+	for (const reg of slotRegs) {
+		hookIndex = 0;
+		const tree = reg.Body(common);
+		assert.ok(tree && typeof tree === "object", "body " + reg.options.key + " renders an element");
+	}
+	console.log("J. apply() contract + first render (stubbed context) — PASS");
+}
+
+// ---- K. heading fragments: split, slug, and heading lookup ----
+{
+	assert.deepEqual(splitFragment("page#Signs and symptoms"), { key: "page", fragment: "Signs and symptoms" });
+	assert.deepEqual(splitFragment("#某节"), { key: "", fragment: "某节" });
+	assert.deepEqual(splitFragment("page"), { key: "page", fragment: "" });
+	assert.deepEqual(splitFragment("  page  "), { key: "page", fragment: "" });
+
+	assert.equal(slugify("Signs and symptoms"), "signs-and-symptoms");
+	assert.equal(slugify("  C++ 入门  "), "c-入门");
+	assert.equal(slugify("神话造世（Foundation）"), "神话造世foundation");
+	assert.equal(slugify("a--b"), "a-b");
+	assert.equal(slugify("!!!"), "");
+
+	// findHeading only needs querySelectorAll + textContent, so a plain list works.
+	const heading = (text) => ({ textContent: text });
+	const container = {
+		querySelectorAll: () => [
+			heading("世界构建"),
+			heading("Signs and symptoms"),
+			heading("神话造世（Foundation）"),
+			heading("重复"),
+			heading("重复"),
+		],
+	};
+	assert.equal(findHeading(container, "Signs and symptoms").textContent, "Signs and symptoms", "exact text wins");
+	assert.equal(findHeading(container, "signs-and-symptoms").textContent, "Signs and symptoms", "slug match");
+	assert.equal(findHeading(container, "神话造世foundation").textContent, "神话造世（Foundation）", "CJK + parentheses slug");
+	assert.equal(findHeading(container, "世界构建").textContent, "世界构建", "CJK exact");
+	assert.equal(findHeading(container, "重复").textContent, "重复", "first duplicate wins");
+	assert.equal(findHeading(container, "nope"), null, "missing fragment");
+	assert.equal(findHeading(container, ""), null, "empty fragment");
+	assert.equal(findHeading(null, "x"), null, "no container");
+	console.log("K. heading fragment split/slug/lookup — PASS");
+}
 
 console.log("\nALL IMPLEMENTATION TESTS PASSED ✅ (lib/client.js + lib/index.js contract)");

@@ -1,5 +1,10 @@
 # llm-wiki-sidebar 插件改进方案 v2：溯源/站内相对链接可点击（修订版）
 
+> **已作废（v2.0.0）。** 本文描述的是 v1.x 的 DOM 文本配对装饰方案，它建立在
+> `dsh-better-sidebar` 的 `betterSidebar` 文件查看器之上。DSH 自带右侧边栏后，插件改为
+> 「自己渲染 wiki 页面」（`ctx.sidebarRightTabs` 资源类型 + markdown-it + `[[wikilink]]`
+> 规则 + `tab.actions.openResource`），不再读取或改写任何其它插件的 DOM。本文仅作历史记录。
+
 > 日期：2026-09-05 ｜ 状态：**已实施（v1.1.1 已部署；v1.1.0 首轮实测发现 CM 污染缺陷，见 §7）** ｜ 取代：`improvement-source-link-navigation.md`（v1）的**客户端设计部分**
 > 目标包：`formal-package/llm-wiki-sidebar`（package.json 1.0.0 → 1.1.0）
 > v1 保留：§3.1 服务端改造、§3.2(a) CSS、§3.2(b) resolver、§3.4 版本文档、§4.1 部署、§P3/P4/P5 调查结论

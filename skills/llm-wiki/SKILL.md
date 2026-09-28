@@ -42,8 +42,15 @@ Division of work: **you drive ingest/query/maintenance; the plugin displays and 
 Resolve the wiki root in this order and confirm with the user when ambiguous:
 
 1. `$WIKI_PATH` from the environment, if set (checked via `bash`: `echo "${WIKI_PATH:-}"`).
-2. **A project wiki: `wiki/` under the current workspace root — the supported location for the sidebar plugin** (its file routes enforce the workspace fence; a wiki outside the session workspace is browsable by neither preview nor edit).
+2. **A project wiki: `wiki/` under the current workspace root — the default location for the sidebar plugin** (its file routes enforce the workspace fence; a wiki outside the session workspace is browsable by neither preview nor edit).
 3. The global default `~/wiki` (Karpathy/hermes convention) — CLI lint still works there, but the sidebar cannot open those pages; say so explicitly if the user picks it.
+
+**Multiple wikis per workspace are supported.** Each knowledge base lives in its own directory under the workspace root: `wiki/` remains the default, additional ones conventionally named `wiki-<topic>/`. The sidebar picks up any directory that has `SCHEMA.md` or `index.md` plus a section/`raw/` dir automatically; other locations can be registered via the plugin's `wikiRoots` config. Practical rules:
+
+- When the user asks for a wiki and one already exists in the workspace, ask first: **extend the existing wiki, or start a separate one** — never merge unrelated domains into one wiki silently.
+- With several wikis present, confirm the target wiki before ingesting, curating, or answering, and stay in that wiki for the session. State the wiki root you are working in (`wiki-game/`) so the user can correct you.
+- Each wiki has an independent slug namespace: cross-wiki references must be relative `.md` links, not `[[wikilinks]]` (those resolve only within one wiki and will render as broken).
+- Lint each wiki root separately: `wiki_lint.py <wiki-root>`.
 
 The wiki is just a directory of markdown files — open it in Obsidian, VS Code, or any editor. No database, no special tooling required.
 

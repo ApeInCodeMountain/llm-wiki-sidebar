@@ -16,17 +16,35 @@
 #             - !!js "<resolver for this package's skills/ directory>"
 #
 # Row 1 is the plugin itself: host half (webServer routes over the sandbox-aware
-# fs service) + client half (sidebar tab + markdown viewer decoration).
+# fs service) + client half (browse tab + a wiki-page tab type registered in the
+# sidebar shipped with DeepSeek Harness itself).
 # Row 2 mounts the SKILL that ships inside this package
 # (`skills/llm-wiki/SKILL.md` + `scripts/wiki_lint.py`) through a dedicated
 # skill-filesystem instance: `providerName` keeps it distinct from any other
 # provider, and `includeDefaultRoots: false` limits it to exactly this
 # package's skills directory. The `!!js` resolver tries the plausible baseUrls
 # (profile root for a manual patch row, the package directory for a bundle
-# patch) and picks the one where the skill actually exists.
+# patch) and picks the first one where the skill actually exists: a linked
+# dependency (`node_modules/llm-wiki-sidebar`), an in-profile copy
+# (`llm-wiki-sidebar/`), then the package directory itself.
 #
-# The plugin consumes dsh-better-sidebar's `betterSidebar` service (sidebar tab
-# + file viewer) and the host `fs`/`webServer` services.
+# The plugin's client half targets @deepseek-ai/dsh-client-ui-sidebar-right
+# (`ctx.sidebarRightTabs` / `ctx.slots`) and reads page text through the
+# product's `workspaceFiles` Remote. Its host half consumes `fs` and
+# `webServer`.
+#
+# Optional multi-wiki config (see README "Multiple wikis"). The rows above ship
+# without config — the default `<workspace>/wiki` plus auto-discovery of
+# wiki-like sibling directories covers most setups. To register extra roots
+# (e.g. outside the discovery heuristic or not yet created), add `config:` to
+# row 1:
+#
+#   - insert:
+#       - id: llm-wiki-sidebar
+#         name: 'llm-wiki-sidebar'
+#         config:
+#           wikiRoots: ['wiki-game', 'kb/research']   # workspace-relative or absolute inside the workspace
+#           exclude: ['node_modules', 'archive']      # basenames skipped during discovery
 - insert:
     - id: llm-wiki-sidebar
       name: 'llm-wiki-sidebar'
@@ -36,4 +54,4 @@
         providerName: 'llm-wiki-sidebar-skills'
         includeDefaultRoots: false
         customSkillDirs:
-          - !!js "(() => { const u = process.getBuiltinModule('node:url'); const fsp = process.getBuiltinModule('node:fs'); const candidates = [new URL('llm-wiki-sidebar/skills/', baseUrl), new URL('skills/', baseUrl)]; for (const c of candidates) { try { const dir = u.fileURLToPath(c); if (fsp.existsSync(dir + 'llm-wiki/SKILL.md')) return dir; } catch (e) {} } throw new Error('llm-wiki-sidebar: skills/llm-wiki/SKILL.md not found relative to baseUrl ' + String(baseUrl)); })()"
+          - !!js "(() => { const u = process.getBuiltinModule('node:url'); const fsp = process.getBuiltinModule('node:fs'); const candidates = [new URL('node_modules/llm-wiki-sidebar/skills/', baseUrl), new URL('llm-wiki-sidebar/skills/', baseUrl), new URL('skills/', baseUrl)]; for (const c of candidates) { try { const dir = u.fileURLToPath(c); if (fsp.existsSync(dir + 'llm-wiki/SKILL.md')) return dir; } catch (e) {} } throw new Error('llm-wiki-sidebar: skills/llm-wiki/SKILL.md not found relative to baseUrl ' + String(baseUrl)); })()"
