@@ -173,5 +173,79 @@ await writeFile(join(root, "src", "index.md"), "# not a wiki\n");
 	console.log("E. workspace containment — PASS");
 }
 
+// ---- F. browser-trust fence: loopback / configured trustedHosts / bind IP, and the refusals ----
+// Regression for the fence reading its trusted hosts from a non-existent
+// `webRuntime` service and degrading to loopback-only: the /llm-wiki/api
+// routes 403'd when the GUI was reached through a non-loopback Host
+// (reverse proxy / tunnel), while 127.0.0.1 kept working.
+{
+	// `apply` (top of this file) re-runs the whole plugin per call, so each
+	// fenceCtx swaps in a fresh route table + webServer identity.
+	const fenceCtx = (config, webServer) => {
+		routes.clear();
+		const ctxF = {
+			fs: fsStub,
+			webServer: { register(route) { routes.set(route.path, route.handler); return () => {}; }, ...webServer },
+			get() { return undefined; },
+			effect(fn) { fn(); return () => {}; },
+		};
+		apply(ctxF, config);
+	};
+	const fenceCall = (headers) => new Promise((resolve, reject) => {
+		const handler = routes.get("/llm-wiki/api/wikis");
+		assert.ok(handler, "route registered: /llm-wiki/api/wikis");
+		const req = {
+			method: "POST",
+			headers: { "content-type": "application/json", ...headers },
+			async *[Symbol.asyncIterator]() { yield JSON.stringify({ cwd: root }); },
+		};
+		const res = {
+			statusCode: 0,
+			writeHead(status) { this.statusCode = status; },
+			end(text) { resolve({ status: this.statusCode, body: JSON.parse(text) }); },
+		};
+		Promise.resolve(handler(req, res)).catch(reject);
+	});
+
+	// F1. default (no trustedHosts): loopback passes, a remote host stays fenced
+	fenceCtx({}, { host: "127.0.0.1", protocol: "http:" });
+	assert.equal((await fenceCall({ host: "127.0.0.1:3080", origin: "http://127.0.0.1:3080" })).status, 200, "default: loopback passes");
+	assert.equal((await fenceCall({ host: "app.example", origin: "https://app.example" })).status, 403, "default: remote host fenced");
+
+	// F2. configured trustedHosts: the remote host passes, like the product fence
+	fenceCtx({ trustedHosts: ["app.example"] }, { host: "127.0.0.1", protocol: "http:" });
+	assert.equal((await fenceCall({ host: "app.example", origin: "https://app.example" })).status, 200, "the bug: trusted remote host + same-origin Origin");
+	assert.equal((await fenceCall({ host: "app.example" })).status, 200, "trusted remote host, no Origin (CLI client)");
+	assert.equal((await fenceCall({ host: "app.example:443", origin: "https://app.example:443" })).status, 200, "port-less entry matches any port");
+	assert.equal((await fenceCall({ host: "127.0.0.1:3080", origin: "http://127.0.0.1:3080" })).status, 200, "loopback still passes with the config");
+
+	// F3. the security refusals hold with the config
+	assert.equal((await fenceCall({ host: "evil.example", origin: "https://evil.example" })).status, 403, "untrusted host fenced");
+	assert.equal((await fenceCall({ host: "app.example", origin: "http://127.0.0.1:3080" })).status, 403, "cross-origin Origin fenced");
+	assert.equal((await fenceCall({ host: "app.example", origin: "null" })).status, 403, "opaque Origin fenced");
+	assert.equal((await fenceCall({ host: "127.0.0.1:3080", origin: "http://127.0.0.1:3080", "sec-fetch-site": "cross-site" })).status, 403, "sec-fetch-site: cross-site fenced");
+	assert.equal((await fenceCall({ origin: "http://127.0.0.1:3080" })).status, 403, "missing Host fenced");
+
+	// F4. the listener's bind IP literal is accepted on any port, like the product
+	fenceCtx({}, { host: "10.0.0.7", protocol: "http:" });
+	assert.equal((await fenceCall({ host: "10.0.0.7:9999", origin: "http://10.0.0.7:9999" })).status, 200, "bind IP literal passes on any port");
+	assert.equal((await fenceCall({ host: "10.0.0.7.evil.example" })).status, 403, "a host merely starting with the bind IP is fenced");
+
+	// F5. malformed entries fail the load loudly instead of quietly changing the grant
+	{
+		const ctxF = {
+			fs: fsStub,
+			webServer: { register() { return () => {}; }, host: "127.0.0.1", protocol: "http:" },
+			get() { return undefined; },
+			effect(fn) { fn(); return () => {}; },
+		};
+		const mod = await import("../lib/index.js");
+		assert.throws(() => mod.apply(ctxF, { trustedHosts: ["evil.example/path"] }), /not a bare host\[:port\] authority/);
+		assert.throws(() => mod.apply(ctxF, { trustedHosts: [" app.example "] }), /not a bare host\[:port\] authority/);
+		mod.apply(ctxF, { trustedHosts: ["app.example", "app.example:443", "localhost"] });
+	}
+	console.log("F. browser-trust fence (loopback / trustedHosts / bind IP / refusals / malformed config) — PASS");
+}
+
 await rm(root, { recursive: true, force: true });
 console.log("\nALL HOST TESTS PASSED ✅ (lib/index.js routes)");

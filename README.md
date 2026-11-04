@@ -146,7 +146,33 @@ Example config in `~/.dsh/profiles/web/cordis.patch.yml`:
       config:
         wikiRoots: ['wiki-game', 'kb/research']
         exclude: ['node_modules', 'archive']
+        # Remote hosts the /llm-wiki/api fence accepts beyond loopback —
+        # only needed when the GUI is served under a non-loopback name.
+        trustedHosts: ['app.example']
 ```
+
+### Remote access (GUI served under a domain or through a tunnel)
+
+The `/llm-wiki/api` routes enforce the same browser-trust fence as the `/api`
+gateway, but the plugin cannot read the gateway's `trustedHosts` (the product
+does not expose it to plugins): **by default the fence accepts loopback
+Hosts only.** Reaching the GUI through `https://app.example` (reverse proxy,
+rathole, socat, …) makes the browser send `Host: app.example`, so every wiki
+API call returns `403 forbidden` while `127.0.0.1` keeps working.
+
+Declare the deployment's authorities in the plugin config — same semantics as
+`dsh --profile web --trusted-host` (port-less `host` = any port,
+`host:port` = exact) — and keep the two lists in sync:
+
+```yaml
+- id: llm-wiki-sidebar
+  config:
+    trustedHosts: ['app.example']
+```
+
+Malformed entries (paths, `user@host`, stray whitespace, zero-padded ports)
+fail the plugin load loudly rather than silently changing the grant. The
+listener's bind IP literal is always accepted, like the product fence.
 
 ## How it plugs into the built-in sidebar
 
@@ -174,8 +200,10 @@ preview. The plugin never reads or patches another plugin's DOM.
 workspace-relative or workspace-absolute root resolved by `resolveWikiRoot()`.
 
 All routes enforce the same browser-trust fence as the `/api` gateway
-(loopback/trusted Host + same-origin markers) and read only through the
-sandbox-aware `fs` service. The plugin never writes to disk.
+(loopback / listener bind IP / configured `trustedHosts` + same-origin
+markers; see [Remote access](#remote-access-gui-served-under-a-domain-or-through-a-tunnel))
+and read only through the sandbox-aware `fs` service. The plugin never writes
+to disk.
 
 ## Development
 
