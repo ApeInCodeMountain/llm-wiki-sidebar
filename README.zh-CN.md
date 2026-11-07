@@ -130,6 +130,9 @@ wiki 根都会被校验必须留在会话工作区内（`lib/wiki-root.js`）—
       config:
         wikiRoots: ['wiki-game', 'kb/research']
         exclude: ['node_modules', 'archive']
+        # /llm-wiki/api 围栏在 loopback 之外接受的远程主机——仅当 GUI
+        # 以非 loopback 名称提供时才需要。
+        trustedHosts: ['app.example']
 ```
 
 ## 如何接入内置侧边栏
@@ -156,8 +159,29 @@ wiki 根都会被校验必须留在会话工作区内（`lib/wiki-root.js`）—
 scan/lint/map 的 `wiki` 可省略：省略时选默认 `<cwd>/wiki`；否则为经 `resolveWikiRoot()`
 解析的工作区相对或工作区绝对根。
 
-所有路由都强制与 `/api` 网关相同的浏览器信任围栏（loopback/受信 Host + 同源标记），并且
-只通过沙箱感知的 `fs` 服务读取。插件从不写盘。
+所有路由都强制与 `/api` 网关相同的浏览器信任围栏（loopback / 监听绑定 IP / 配置的
+`trustedHosts` + 同源标记；见下文「远程访问」），并且只通过沙箱感知的 `fs` 服务读取。
+插件从不写盘。
+
+### 远程访问（GUI 通过域名或隧道提供）
+
+`/llm-wiki/api` 路由强制与 `/api` 网关相同的浏览器信任围栏，但插件读不到网关的
+`trustedHosts`（产品不向插件暴露它）：**默认围栏只接受 loopback Host**。通过
+`https://app.example`（反向代理、rathole、socat…）访问 GUI 时，浏览器发送
+`Host: app.example`，于是每个 wiki API 调用都返回 `403 forbidden`，而 `127.0.0.1`
+照常工作。
+
+在插件配置中声明部署的权威，语义与 `dsh --profile web --trusted-host` 相同
+（不带端口的 `host` = 任意端口，`host:port` = 精确匹配），并保持两份列表同步：
+
+```yaml
+- id: llm-wiki-sidebar
+  config:
+    trustedHosts: ['app.example']
+```
+
+格式错误的条目（路径、`user@host`、多余空白、零填充端口）会在插件加载时直接报错，
+而不是悄悄改变授权。监听器的绑定 IP 字面量始终被接受，与产品围栏一致。
 
 ## 开发
 
